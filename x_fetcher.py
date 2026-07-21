@@ -1,6 +1,7 @@
 """Fetch posts from X/Twitter accounts using available APIs."""
 import aiohttp
 import json
+import re  # <-- moved import to top
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -27,7 +28,7 @@ class XFetcher:
     async def fetch_posts(self, username: str, limit: int = 5) -> List[Dict]:
         """Fetch latest posts from an X account.
 
-        Returns list of post dicts with: id, text, created_at, media_urls, 
+        Returns list of post dicts with: id, text, created_at, media_urls,
         likes, retweets, replies, url, author_name, author_avatar
         """
         username = username.lower().strip().replace("@", "")
@@ -88,9 +89,9 @@ class XFetcher:
                 # Parse media from description (basic img extraction)
                 media_urls = []
                 if "<img" in description:
-                    # Simple extraction - in production use proper HTML parser
-                    import re
-                    imgs = re.findall(r'src=["']([^"']+)["']', description)
+                    # Use double quotes for the outer regex string to avoid quote conflicts
+                    # This matches src="..." or src='...' and captures the URL
+                    imgs = re.findall(r'src=["\']([^"\']+)["\']', description)
                     media_urls = [u for u in imgs if u.startswith("http")]
 
                 # Clean description text
