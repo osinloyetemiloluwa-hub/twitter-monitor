@@ -18,5 +18,5 @@ services:
 
 databases:
   - name: xbot-db
-    plan: starter  # Free PostgreSQL (128MB, 10GB storage)
+    plan: free  # Free PostgreSQL (128MB, 10GB storage)
     ipAllowList: []  # Required for Render PostgreSQL
