@@ -24,39 +24,67 @@ class XBot(commands.Bot):
             )
         )
 
-        # More conservative: 30 req/s (leaves safety margin)
+        # Conservative: 30 req/s (safety margin)
         self.rate_limiter = GlobalRateLimiter(max_requests_per_second=30.0)
 
         # Track consecutive 429s for exponential backoff
         self.consecutive_429s = 0
         self.last_429_time = 0
 
-        # Flag to ensure sync happens only once (if we ever allow auto-sync)
-        self._synced_commands = False
-
     async def setup_hook(self):
-        """Load cogs before bot starts."""
+        """Load cogs and register commands before bot starts."""
         await self.load_extension("cogs.twitter")
         print("✅ Twitter cog loaded")
 
         # ----------------------------------------------------------------
-        # IMPORTANT: Do NOT sync commands automatically on every startup.
-        # This is the #1 cause of rate limits. We'll use a manual command.
+        # DO NOT sync automatically on startup – that causes rate limits.
+        # Instead, register a manual sync command.
         # ----------------------------------------------------------------
-        # If you absolutely must auto-sync, uncomment the block below,
-        # but then add a long random delay (e.g., 30–60s) and only do it once.
-        # await asyncio.sleep(30)
-        # if not self._synced_commands:
-        #     synced = await self.tree.sync()
-        #     self._synced_commands = True
-        #     print(f"✅ Synced {len(synced)} slash command(s)")
-        # ----------------------------------------------------------------
+        self.tree.add_command(
+            app_commands.Command(
+                name="sync_commands",
+                description="Sync all slash commands (admin only)",
+                callback=self.sync_commands,
+                default_permissions=discord.Permissions(administrator=True)
+            )
+        )
+        print("ℹ️  Manual sync command registered: /sync_commands")
 
-        print("ℹ️  Slash commands will be synced manually with /sync_commands")
-        print("   (Run this command once after deployment)")
-
-        # Optional: add a small delay before starting any background tasks
+        # Small delay after loading
         await asyncio.sleep(2)
+
+    async def sync_commands(self, interaction: discord.Interaction):
+        """Manually sync slash commands – run once after deployment."""
+        # Simple global cooldown: once per minute per entire bot
+        if not hasattr(self, "_last_sync_time"):
+            self._last_sync_time = 0
+
+        now = asyncio.get_event_loop().time()
+        if now - self._last_sync_time < 60:
+            await interaction.response.send_message(
+                "⏳ Command sync can only be used once per minute. Please wait.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            synced = await self.tree.sync()
+            self._last_sync_time = now
+            await interaction.followup.send(
+                f"✅ Successfully synced {len(synced)} slash command(s).",
+                ephemeral=True
+            )
+            print(f"✅ Manual sync completed: {len(synced)} commands")
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await interaction.followup.send(
+                    "⚠️ Rate limited while syncing. Wait a few minutes and try again.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(f"❌ Sync failed: {e}", ephemeral=True)
 
     async def on_ready(self):
         """Called when bot is fully ready."""
@@ -126,50 +154,6 @@ class XBot(commands.Bot):
         await super().on_interaction(interaction)
 
 
-# ------------------------------------------------------------------------
-# MANUAL SYNC COMMAND – run this once after deployment
-# ------------------------------------------------------------------------
-@bot.tree.command(name="sync_commands", description="Sync all slash commands (admin only)")
-@app_commands.default_permissions(administrator=True)
-async def sync_commands(interaction: discord.Interaction):
-    """Syncs slash commands manually to avoid auto-sync rate limits."""
-    # Rate-limit this command: can only be used once per minute globally
-    # (simple guard using a class variable)
-    if not hasattr(sync_commands, "_last_use"):
-        sync_commands._last_use = 0
-
-    now = asyncio.get_event_loop().time()
-    if now - sync_commands._last_use < 60:
-        await interaction.response.send_message(
-            "⏳ Command sync can only be used once per minute. Please wait.",
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        # Actually sync
-        synced = await interaction.client.tree.sync()
-        sync_commands._last_use = now
-        await interaction.followup.send(
-            f"✅ Successfully synced {len(synced)} slash command(s).",
-            ephemeral=True
-        )
-        print(f"✅ Manual sync completed: {len(synced)} commands")
-    except discord.HTTPException as e:
-        if e.status == 429:
-            await interaction.followup.send(
-                "⚠️ Rate limited while syncing. Wait a few minutes and try again.",
-                ephemeral=True
-            )
-        else:
-            await interaction.followup.send(f"❌ Sync failed: {e}", ephemeral=True)
-
-
-# ------------------------------------------------------------------------
-# MAIN
-# ------------------------------------------------------------------------
 def main():
     if not DISCORD_BOT_TOKEN:
         print("❌ ERROR: DISCORD_BOT_TOKEN not set!")
