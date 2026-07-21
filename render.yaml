@@ -1,8 +1,8 @@
 services:
-  - type: web
+  - type: worker
     name: discord-x-bot
     runtime: python
-    plan: free  # Free tier available; upgrade for better uptime
+    plan: starter  # Free tier available; upgrade for better uptime
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
@@ -18,5 +18,5 @@ services:
 
 databases:
   - name: xbot-db
-    plan: free  # Free PostgreSQL (128MB, 10GB storage)
+    plan: starter  # Free PostgreSQL (128MB, 10GB storage)
     ipAllowList: []  # Required for Render PostgreSQL
