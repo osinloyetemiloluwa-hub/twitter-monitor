@@ -36,23 +36,14 @@ class XBot(commands.Bot):
         await self.load_extension("cogs.twitter")
         print("✅ Twitter cog loaded")
 
-        # ----------------------------------------------------------------
-        # DO NOT sync automatically on startup – that causes rate limits.
-        # Instead, register a manual sync command.
-        # ----------------------------------------------------------------
-        self.tree.add_command(
-            app_commands.Command(
-                name="sync_commands",
-                description="Sync all slash commands (admin only)",
-                callback=self.sync_commands,
-                default_permissions=discord.Permissions(administrator=True)
-            )
-        )
+        # Add the manual sync command (no auto‑sync on startup)
+        self.tree.add_command(self.sync_commands)
         print("ℹ️  Manual sync command registered: /sync_commands")
 
-        # Small delay after loading
         await asyncio.sleep(2)
 
+    @app_commands.command(name="sync_commands", description="Sync all slash commands (admin only)")
+    @app_commands.default_permissions(administrator=True)
     async def sync_commands(self, interaction: discord.Interaction):
         """Manually sync slash commands – run once after deployment."""
         # Simple global cooldown: once per minute per entire bot
@@ -93,14 +84,11 @@ class XBot(commands.Bot):
         print(f"⏱️  Rate limit: 30 req/s (shared token protection)")
         print("─" * 40)
 
-        # Stagger any startup operations
         await asyncio.sleep(5)
 
     async def on_guild_join(self, guild: discord.Guild):
         """Welcome message when bot joins a server — with rate limit protection."""
         print(f"➕ Joined guild: {guild.name} (ID: {guild.id})")
-
-        # Wait before sending welcome to avoid burst
         await asyncio.sleep(3)
 
         target = guild.system_channel
@@ -131,8 +119,6 @@ class XBot(commands.Bot):
                 ),
                 inline=False
             )
-
-            # Use rate-limited send
             await self.rate_limiter.safe_send(target, embed=embed)
 
     async def on_command_error(self, ctx, error):
@@ -142,7 +128,7 @@ class XBot(commands.Bot):
         elif isinstance(error, discord.HTTPException) and error.status == 429:
             self.consecutive_429s += 1
             self.last_429_time = asyncio.get_event_loop().time()
-            backoff = min(2 ** self.consecutive_429s, 60)  # Exponential up to 60s
+            backoff = min(2 ** self.consecutive_429s, 60)
             print(f"⚠️ 429 hit! Backing off for {backoff}s (consecutive: {self.consecutive_429s})")
             await asyncio.sleep(backoff)
         else:
