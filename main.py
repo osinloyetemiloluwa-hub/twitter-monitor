@@ -4,7 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import os
-from aiohttp import web  # <-- added
+from aiohttp import web
 
 from config import DISCORD_BOT_TOKEN
 from rate_limiter import GlobalRateLimiter
@@ -28,23 +28,52 @@ class XBot(commands.Bot):
         self.rate_limiter = GlobalRateLimiter(max_requests_per_second=30.0)
         self.consecutive_429s = 0
         self.last_429_time = 0
-        self._http_server = None   # to keep track
+        self._http_server = None
 
     async def setup_hook(self):
         """Load cogs and register commands before bot starts."""
         await self.load_extension("cogs.twitter")
         print("✅ Twitter cog loaded")
 
-        # Register the manual sync command
+        # Register the manual sync command (slash)
         self.tree.add_command(self.sync_commands)
-        print("ℹ️  Manual sync command registered: /sync_commands")
-
+        print("ℹ️  /sync_commands registered (admin only inside)")
+        print("ℹ️  Also use !sync (prefix command) to sync slash commands")
         await asyncio.sleep(2)
 
-    @app_commands.command(name="sync_commands", description="Sync all slash commands (admin only)")
-    @app_commands.default_permissions(administrator=True)
+    # ---------- PREFIX COMMAND: !sync ----------
+    @commands.command(name="sync")
+    async def sync_prefix(self, ctx: commands.Context):
+        """Sync slash commands via prefix command."""
+        # Only allow server admins (optional)
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ You need administrator permissions to sync commands.")
+            return
+
+        await ctx.send("⏳ Syncing slash commands...")
+        try:
+            synced = await self.tree.sync()
+            await ctx.send(f"✅ Synced {len(synced)} slash command(s).")
+            print(f"✅ Manual sync (prefix) completed: {len(synced)} commands")
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await ctx.send("⚠️ Rate limited. Wait a minute and try again.")
+            else:
+                await ctx.send(f"❌ Sync failed: {e}")
+
+    # ---------- SLASH COMMAND: /sync_commands ----------
+    @app_commands.command(name="sync_commands", description="Sync all slash commands")
+    # No default_permissions here – we'll check inside
     async def sync_commands(self, interaction: discord.Interaction):
         """Manually sync slash commands – run once after deployment."""
+        # Check admin inside (so command is visible but restricted)
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ You need administrator permissions to use this command.",
+                ephemeral=True
+            )
+            return
+
         if not hasattr(self, "_last_sync_time"):
             self._last_sync_time = 0
 
@@ -82,20 +111,14 @@ class XBot(commands.Bot):
         print(f"⏱️  Rate limit: 30 req/s (shared token protection)")
         print("─" * 40)
 
-        # Start the health HTTP server so Render sees an open port
         await self.start_health_server()
-
-        # Stagger any other startup operations
         await asyncio.sleep(5)
 
     async def start_health_server(self):
-        """Start a lightweight HTTP server for Render health checks."""
         if self._http_server is not None:
-            return  # already running
+            return
 
-        # Use the PORT env variable Render provides, or fallback to 8080
         port = int(os.environ.get("PORT", 8080))
-        # Ensure port is within the allowed range (optional)
         if not (3000 <= port <= 10000):
             port = 8080
 
@@ -108,14 +131,12 @@ class XBot(commands.Bot):
         await site.start()
 
         self._http_server = runner
-        print(f"✅ Health server started on port {port} (for Render)")
+        print(f"✅ Health server started on port {port}")
 
     async def _health_handler(self, request):
-        """Simple OK response for health checks."""
         return web.Response(text="OK", status=200)
 
     async def on_guild_join(self, guild: discord.Guild):
-        """Welcome message when bot joins a server — with rate limit protection."""
         print(f"➕ Joined guild: {guild.name} (ID: {guild.id})")
         await asyncio.sleep(3)
 
@@ -150,20 +171,18 @@ class XBot(commands.Bot):
             await self.rate_limiter.safe_send(target, embed=embed)
 
     async def on_command_error(self, ctx, error):
-        """Handle command errors with backoff on 429s."""
         if isinstance(error, commands.CommandOnCooldown):
             await ctx.send(f"⏳ Command on cooldown. Try again in {error.retry_after:.1f}s.", delete_after=10)
         elif isinstance(error, discord.HTTPException) and error.status == 429:
             self.consecutive_429s += 1
             self.last_429_time = asyncio.get_event_loop().time()
             backoff = min(2 ** self.consecutive_429s, 60)
-            print(f"⚠️ 429 hit! Backing off for {backoff}s (consecutive: {self.consecutive_429s})")
+            print(f"⚠️ 429 hit! Backing off for {backoff}s")
             await asyncio.sleep(backoff)
         else:
             print(f"Command error: {error}")
 
     async def on_interaction(self, interaction: discord.Interaction):
-        """Wrap interactions with rate limit tracking."""
         await self.rate_limiter.acquire(weight=1)
         await super().on_interaction(interaction)
 
@@ -171,7 +190,6 @@ class XBot(commands.Bot):
 def main():
     if not DISCORD_BOT_TOKEN:
         print("❌ ERROR: DISCORD_BOT_TOKEN not set!")
-        print("   Create a .env file or set the environment variable.")
         return
 
     bot = XBot()
