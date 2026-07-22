@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import os
+from aiohttp import web  # <-- added
 
 from config import DISCORD_BOT_TOKEN
 from rate_limiter import GlobalRateLimiter
@@ -24,19 +25,17 @@ class XBot(commands.Bot):
             )
         )
 
-        # Conservative: 30 req/s (safety margin)
         self.rate_limiter = GlobalRateLimiter(max_requests_per_second=30.0)
-
-        # Track consecutive 429s for exponential backoff
         self.consecutive_429s = 0
         self.last_429_time = 0
+        self._http_server = None   # to keep track
 
     async def setup_hook(self):
         """Load cogs and register commands before bot starts."""
         await self.load_extension("cogs.twitter")
         print("✅ Twitter cog loaded")
 
-        # Add the manual sync command (no auto‑sync on startup)
+        # Register the manual sync command
         self.tree.add_command(self.sync_commands)
         print("ℹ️  Manual sync command registered: /sync_commands")
 
@@ -46,7 +45,6 @@ class XBot(commands.Bot):
     @app_commands.default_permissions(administrator=True)
     async def sync_commands(self, interaction: discord.Interaction):
         """Manually sync slash commands – run once after deployment."""
-        # Simple global cooldown: once per minute per entire bot
         if not hasattr(self, "_last_sync_time"):
             self._last_sync_time = 0
 
@@ -84,7 +82,37 @@ class XBot(commands.Bot):
         print(f"⏱️  Rate limit: 30 req/s (shared token protection)")
         print("─" * 40)
 
+        # Start the health HTTP server so Render sees an open port
+        await self.start_health_server()
+
+        # Stagger any other startup operations
         await asyncio.sleep(5)
+
+    async def start_health_server(self):
+        """Start a lightweight HTTP server for Render health checks."""
+        if self._http_server is not None:
+            return  # already running
+
+        # Use the PORT env variable Render provides, or fallback to 8080
+        port = int(os.environ.get("PORT", 8080))
+        # Ensure port is within the allowed range (optional)
+        if not (3000 <= port <= 10000):
+            port = 8080
+
+        app = web.Application()
+        app.router.add_get("/", self._health_handler)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+
+        self._http_server = runner
+        print(f"✅ Health server started on port {port} (for Render)")
+
+    async def _health_handler(self, request):
+        """Simple OK response for health checks."""
+        return web.Response(text="OK", status=200)
 
     async def on_guild_join(self, guild: discord.Guild):
         """Welcome message when bot joins a server — with rate limit protection."""
